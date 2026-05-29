@@ -1,6 +1,8 @@
-from google import genai
-from dotenv import load_dotenv
+import json
 import os
+
+from dotenv import load_dotenv
+from google import genai
 
 load_dotenv()
 
@@ -8,7 +10,7 @@ client = genai.Client(
     api_key=os.getenv("GEMINI_API_KEY")
 )
 
-CATEGORIES = [
+ALLOWED_CATEGORIES = [
     "Utilities - Water / Gas",
     "Rent / Other Maintenance",
     "Dining out",
@@ -21,63 +23,139 @@ CATEGORIES = [
     "Travel",
     "Clothes / Accessories / Haircut",
     "Electricity",
-    "Other",
+    "Other:",
     "Salary",
     "Interest",
     "Cashback / Refunds",
 ]
 
-
-def clean_response(text):
-
-    return (
-        text
-        .replace("*", "")
-        .replace("\n", "")
-        .strip()
-    )
+ALLOWED_PAYMENT_MODES = [
+    "Debit Card - SBI",
+    "Credit Card - HDFC",
+    "Other:"
+]
 
 
-def classify_with_llm(
-    message: str,
-    merchant: str,
-    transaction_type: str
+def extract_transaction_with_llm(
+    message: str
 ):
 
     prompt = f"""
-You are a financial transaction classifier.
+You are an expert financial transaction parser.
 
-Transaction SMS:
+Analyze the transaction message and extract structured information.
+
+MESSAGE:
 {message}
 
-Merchant:
-{merchant}
+Return ONLY valid JSON.
 
-Transaction Type:
-{transaction_type}
+Schema:
 
-Choose EXACTLY ONE category
-from this list:
+{{
+    "transaction_type": "Expense or Income",
+    "amount": 0,
+    "merchant": "",
+    "category": "",
+    "payment_mode": ""
+}}
 
-{", ".join(CATEGORIES)}
+Allowed categories:
+
+{ALLOWED_CATEGORIES}
+
+Allowed payment modes:
+
+{ALLOWED_PAYMENT_MODES}
 
 Rules:
-- Return ONLY category name
-- No markdown
-- No explanation
+
+1. If money leaves the account:
+   transaction_type = Expense
+
+2. If money enters the account:
+   transaction_type = Income
+
+3. Personal transfers:
+   - received money -> Gifts
+   - sent money -> Gifts
+
+4. Salary payments -> Salary
+
+5. Interest payments -> Interest
+
+6. Refunds and cashback -> Cashback / Refunds
+
+7. Food ordering apps -> Food Delivery
+
+8. Ride sharing apps -> Cabs / Metro / Commute
+
+9. Medical stores/hospitals -> Medical
+
+10. Streaming subscriptions:
+    Netflix
+    Spotify
+    Prime Video
+    Hotstar
+    YouTube Premium
+
+    -> Gadgets / Internet / Other subscriptions
+
+11. payment_mode MUST be one of:
+
+    if the card number is X8819 then - Debit Card - SBI
+    Credit Card - HDFC
+
+12. category MUST be one of the allowed categories.
+
+13. Return ONLY JSON.
+
+14. No markdown.
+
+15. No explanation.
 """
 
-    response = client.models.generate_content(
-        model="gemini-2.0-flash",
-        contents=prompt,
-    )
+    try:
 
-    category = clean_response(
-        response.text
-    )
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
 
-    if category not in CATEGORIES:
-        return "Other"
+        text = response.text.strip()
 
-    return category
+        text = (
+            text
+            .replace("```json", "")
+            .replace("```", "")
+            .strip()
+        )
+
+        data = json.loads(text)
+
+        if data.get("category") not in ALLOWED_CATEGORIES:
+            data["category"] = "Other:"
+
+        if (
+            data.get("payment_mode")
+            not in ALLOWED_PAYMENT_MODES
+        ):
+            data["payment_mode"] = "Other:"
+
+        return data
+
+    except Exception as e:
+
+        print(
+            "GEMINI EXTRACTION ERROR:",
+            e
+        )
+
+        return {
+            "transaction_type": "Expense",
+            "amount": 0,
+            "merchant": "Unknown",
+            "category": "Other:",
+            "payment_mode": "Other:"
+        }
 

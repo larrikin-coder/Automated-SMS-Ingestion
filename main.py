@@ -1,18 +1,12 @@
 from fastapi import FastAPI
 
 from app.models import SMSRequest
-
-from app.sms_parser import (
-    extract_amount,
-    extract_merchant,
-    extract_payment_mode,
-    extract_transaction_type,
+from app.llm_classifier import (
+    extract_transaction_with_llm
 )
-
-from app.merchant_classifier import classify_merchant
-from app.llm_classifier import classify_with_llm
-from app.form_submit import submit_expense_form
-
+from app.form_submit import (
+    submit_expense_form
+)
 
 app = FastAPI()
 
@@ -26,64 +20,33 @@ def home():
 
 
 @app.post("/sms")
-def process_sms(sms_request: SMSRequest):
+def process_sms(
+    sms_request: SMSRequest
+):
 
     message = sms_request.message
 
-    amount = extract_amount(message)
-
-    merchant = extract_merchant(message)
-
-    payment_mode = extract_payment_mode(message)
-
-    transaction_type = extract_transaction_type(
+    parsed = extract_transaction_with_llm(
         message
     )
 
-    if not merchant:
-        merchant = "Unknown"
-
-    # First try rule-based classification
-    category = classify_merchant(merchant)
-
-    llm_used = False
-
-    if category is None:
-
-        try:
-
-            category = classify_with_llm(
-                message,
-                merchant,
-                transaction_type
-            )
-
-            llm_used = True
-
-        except Exception as e:
-
-            print("LLM ERROR:", e)
-
-            category = "Other"
+    if not parsed:
+        return {
+            "status": "error",
+            "message": "Failed to parse transaction"
+        }
 
     submit_expense_form(
-        expense_type=transaction_type,
-        category=category,
-        amount=amount,
-        payment_mode=payment_mode,
-        description=message,
-        remarks=(
-            f"Merchant: {merchant}, "
-        )
+        expense_type=parsed["transaction_type"],
+        category=parsed["category"],
+        amount=parsed["amount"],
+        payment_mode=parsed["payment_mode"],
+        description=parsed['merchant'],
+        remarks=f"Merchant: {parsed['merchant']}"
     )
 
     return {
         "status": "success",
-        "category": category,
-        "amount": amount,
-        "payment_mode": payment_mode,
-        "merchant": merchant,
-        "transaction_type": transaction_type,
-        "llm_used": llm_used
+        "parsed": parsed
     }
 
